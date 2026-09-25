@@ -25,4 +25,4 @@ class_name = "GeoProxy"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["GeoProxy"]
+new_sqlite_classes = ["GeoProxy"]
