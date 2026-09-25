@@ -159,6 +159,30 @@ export default {
     try {
       // Validate URL format
       const url = new URL(request.url);
+
+      // --- DIAGNOSTIC ROUTE (temporary, safe to remove) ---
+      // Visit /_diag to see where this Worker runs and where the GeoProxy DO runs.
+      if (url.pathname === "/_diag") {
+        const out = {
+          worker_colo: (request.cf && request.cf.colo) || "unknown",
+          worker_country: (request.cf && request.cf.country) || "unknown",
+          geo_hint: GEO_PROXY_HINT,
+        };
+        try {
+          const id = env.GEO_PROXY.idFromName("diag");
+          const stub = env.GEO_PROXY.get(id, { locationHint: GEO_PROXY_HINT });
+          const h = new Headers();
+          h.set("X-Target-URL", "https://www.cloudflare.com/cdn-cgi/trace");
+          const r = await stub.fetch(new Request("https://geo-proxy/", { headers: h }));
+          out.do_trace = (await r.text()).replace(/\s+/g, " ").trim();
+        } catch (e) {
+          out.do_error = String((e && e.message) || e);
+        }
+        return new Response(JSON.stringify(out, null, 2), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
       
       // Parse path segments
       const pathSegments = url.pathname.split('/').filter(Boolean);
