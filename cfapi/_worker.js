@@ -1,3 +1,5 @@
+import { DurableObject } from "cloudflare:workers";
+
 /**
  * =================================================================================
  * All-in-One AI Gateway Worker with Analytics Engine Logging
@@ -20,6 +22,45 @@ const ROUTE_MAP = {
   "groq": "api.groq.com",
   "openai": "api.openai.com",
 };
+
+// --- GEO PROXY (Durable Object) ---
+// Forces upstream requests to egress from a chosen region so providers such as
+// OpenAI do not return unsupported_country_region_territory (403) when this
+// Worker would otherwise run on an edge in a restricted region (e.g. HKG).
+const GEO_PROXY_HINT = "wnam"; // US West. Try "enam" (US East) if needed.
+
+export class GeoProxy extends DurableObject {
+  async fetch(request) {
+    const targetUrl = request.headers.get("X-Target-URL");
+    if (!targetUrl) {
+      return new Response("Missing X-Target-URL", { status: 400 });
+    }
+    const headers = new Headers(request.headers);
+    headers.delete("X-Target-URL");
+    return fetch(targetUrl, {
+      method: request.method,
+      headers,
+      body: request.body,
+      redirect: "follow",
+    });
+  }
+}
+
+async function fetchViaGeoProxy(env, req) {
+  // Fall back to a direct fetch when the binding is absent.
+  if (!env.GEO_PROXY) return fetch(req);
+  const id = env.GEO_PROXY.idFromName("singleton");
+  const stub = env.GEO_PROXY.get(id, { locationHint: GEO_PROXY_HINT });
+  const headers = new Headers(req.headers);
+  headers.set("X-Target-URL", req.url);
+  return stub.fetch(new Request("https://geo-proxy/", {
+    method: req.method,
+    headers,
+    body: req.body,
+    redirect: "follow",
+  }));
+}
+
 
 // --- HELPER FUNCTIONS FOR API ROTATION ---
 
@@ -269,7 +310,7 @@ async function handleRequestWithRotation(request, service, env, url) {
           });
           
           try {
-            lastResponse = await fetch(proxyRequest);
+            lastResponse = await fetchViaGeoProxy(env, proxyRequest);
             
             // Check if successful or not a 429 error
             if (lastResponse.status !== 429) {
@@ -314,7 +355,7 @@ async function handleRequestWithRotation(request, service, env, url) {
     redirect: 'follow',
   });
   
-  const upstreamResponse = await fetch(proxyRequest);
+  const upstreamResponse = await fetchViaGeoProxy(env, proxyRequest);
   const newResponse = new Response(upstreamResponse.body, upstreamResponse);
   applyCorsHeaders(newResponse);
   return newResponse;
